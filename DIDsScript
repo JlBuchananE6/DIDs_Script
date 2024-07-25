@@ -1,0 +1,226 @@
+#!/bin/bash
+
+startTime=$(date +%s)
+
+runDir=$(pwd)
+echo "$runDir"
+echo ""
+echo "Is this your run path?"
+read -r -p "> " userResponse
+if [[ "$userResponse" == "yes" ]]; then
+    echo "Okay!"
+    echo ""
+else
+    echo "Abort! Abort!"
+    echo "Find the right directory and we will try this again..."
+    exit 1
+fi
+
+missingElements=()
+
+# Gather missing element directories and prompt user to continue if missing
+for element in "ABC" "DEF" "GHI" "JKL" "MNO" "PQR" "STU"; do
+    if [[ ! -d "$element" ]]; then
+        missingElements+=("$element")
+    fi
+done
+
+# If missing elements then prompt the user
+if [[ ${#missingElements[@]} -ne 0 ]]; then
+    for missing in "${missingElements[@]}"; do
+        echo "$missing element doesn't exist. Continue? (yes/no)"
+        read -r -p "> " userDecision
+        if [[ "$userDecision" != "yes" ]]; then
+            echo "Exiting...while you figure that out..."
+            exit 1
+        fi
+    done
+fi
+
+# Declare associative arrays to hold element information
+declare -A elementID=(
+    ["ABC"]="A1111"
+    ["DEF"]="D2222"
+    ["GHI"]="G3333"
+    ["JKL"]="J4444"
+    ["MNO"]="M5555"
+    ["PQR"]="P7777"
+    ["STU"]="S8888"
+)
+
+declare -A elementClass=(
+    ["ABC"]="xxx//xxx"
+    ["DEF"]="xxx//xxx"
+    ["GHI"]="xxx//xxx"
+    ["JKL"]="xxx//xxx"
+    ["MNO"]="xxx//xxx"
+    ["PQR"]="xxx//xxx"
+    ["STU"]="xxx//xxx"
+)
+
+# Static information for .done file
+classifiedBy="xxx"
+derivedFrom="xxx"
+declassOn="xxx"
+originator="xxx"
+mailingAddress="xxx"
+distributionStatement="xxx"
+classOfDone="xxx"
+
+# Navigate back to the julian day directory 
+cd ../
+jdDirName=$(basename "$PWD")
+
+# Navigate to the event directory 
+cd ../..
+eventDirName=$(basename "$PWD")
+
+# Make the DIDs directory to store .done .gzip .md5 organized by julian day
+didsDir="$(pwd)/DIDs/$jdDirName"
+mkdir -p "$didsDir"
+
+# Go back to the run directory so that the script can be executed
+cd "$runDir" || exit
+
+# Checks for tar.gz in ALL elements folders
+echo ""
+echo "Checking for .tar.gz"
+echo ""
+
+elementsWithTarGz=()
+elementsMissingTarGz=()
+for element in "${!elementID[@]}"; do
+    if find "$element" -maxdepth 1 -type f -name "*.tar.gz" | grep -q .; then
+        elementsWithTarGz+=("$element")
+    else
+        elementsMissingTarGz+=("$element")
+    fi
+done
+
+# Prompt user with findings 
+if [[ ${#elementsMissingTarGz[@]} -eq 0 ]]; then
+    echo "Found .tar.gz files in all elements:"
+    for element in "${elementsWithTarGz[@]}"; do
+        echo "- $element"
+    done
+    echo ""
+    echo "Continue? (yes/no)"
+else
+    echo "Element(s) missing .tar.gz(s):"
+    for element in "${elementsMissingTarGz[@]}"; do
+        echo "- $element"
+    done
+    echo ""
+    echo "Continue? (yes/no)"
+fi
+
+read -r -p "> " proceed
+if [[ "$proceed" != "yes" ]]; then
+    echo "Right...getting out of here..."
+    exit 1
+fi
+
+# Loop through each element directory and process .tar.gzs
+for element in "${!elementID[@]}"; do
+    id="${elementID[$element]}"
+    elementDir="$element"
+
+    # Check to make sure the .tar.gz is there
+    tarFilesFound=$(find "$elementDir" -maxdepth 1 -name "*.tar.gz" | wc -l)
+    if [[ $tarFilesFound -gt 0 ]]; then
+        # Process each .tar.gz found
+        for tarFile in "$elementDir"/*.tar.gz; do
+            echo ""
+            echo "DIDing .tar.gz in $elementDir"
+
+            # Copy and add ID to .tar.gz
+            baseFileName=$(basename "$tarFile" .tar.gz)
+            newTarFileName="${id}_${baseFileName}_dids.tar.gz"
+            cp "$tarFile" "$didsDir/$newTarFileName"
+            echo ""
+            echo "Adding ID to $element .done .md5 and .tar.gz"
+            echo ""
+
+            # Overwriting logic for .md5
+            md5FileName="${id}_${baseFileName}_dids.md5"
+            md5FilePath="$didsDir/$md5FileName"
+
+            # Check if it already exists
+            if [[ -f "$md5FilePath" ]]; then
+                # Prompt user to confirm overwrite
+                read -r -p "$md5FileName already exists. Do you want to overwrite it? (yes/no)" userConfirmMd5
+                if [[ "$userConfirmMd5" != "yes" ]]; then
+                    echo "Okay, let's not do that..."
+                    echo ""
+                    continue
+                fi
+            fi
+
+            # ABC handling to create .md5
+            (cd "$didsDir" && md5sum "$newTarFileName" > "$md5FileName")
+
+            # Check that .md5 is created before setting permissions
+            attempt=0
+            maxAttempt=15
+
+            while [[ ! -f "$md5FilePath" && $attempt -lt $maxAttempt ]]; do
+                echo "Waiting on $md5FileName to be created..."
+                sleep 20
+                ((attempt++))
+            done
+
+            if [[ -f "$md5FilePath" ]]; then
+                chmod 666 "$md5FilePath"
+            else
+                echo "Failed to create $md5FileName after $maxAttempt attempts."
+            fi
+
+            # Overwriting logic for .done
+            doneFileName="${id}_${baseFileName}_dids.done"
+            doneFilePath="$didsDir/$doneFileName"
+
+            # Check if it already exists
+            if [[ -f "$doneFilePath" ]]; then
+                # Prompt user to confirm overwrite
+                read -r -p "$doneFileName already exists. Do you want to overwrite it? (yes/no)" userConfirmDone
+                if [[ "$userConfirmDone" != "yes" ]]; then
+                    echo "Okay, let's not do that..."
+                    echo ""
+                    continue
+                fi
+            fi
+
+            sha256=$(sha256sum "$didsDir/$newTarFileName" | cut -d' ' -f1)
+            todayDate=$(date +%Y/%m/%d)
+            cat <<EOF> "$doneFilePath"
+Event Name: $eventDirName
+ID: $id
+Date: $todayDate
+Class of data product: ${elementClass[$element]}
+Class By: $classifiedBy
+Derived From: $derivedFrom
+Declass On: $declassOn
+Originator: $originator
+Mailing Address: $mailingAddress
+Distribution Statement: $distributionStatement
+Class of .done: $classOfDone
+SHA256: $sha256
+EOF
+            chmod 666 "$doneFilePath"
+        done
+    fi
+done
+
+endTime=$(date +%s)
+duration=$((endTime - startTime))
+
+# Converts duration in hours, minutes, and seconds
+hours=$((duration / 3600))
+mins=$(( (duration % 3600) / 60 ))
+secs=$((duration % 60))
+
+# Report to user 
+echo "This took $hours hour(s), $mins minute(s) and $secs second(s)."
+echo ""
+echo "Later Sk8ter..."
+
